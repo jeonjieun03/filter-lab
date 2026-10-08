@@ -1,0 +1,542 @@
+<title>블랙리스트 필터 체험기</title>
+<style>
+  /* 레이아웃: 세로 한 흐름 — 소개 → 공격종류 토글 → 3단계(필터·공격코드·결과) */
+  :root{
+    --bg:#e8edeb; --grid:rgba(18,70,64,.055); --surface:#ffffff; --surface-2:#f1f5f4;
+    --ink:#15211f; --muted:#5a6a67; --line:#d1dbd8;
+    --accent:#0d7d74; --accent-soft:#d7efec;
+    --danger:#c23a2c; --danger-soft:#f8e4e0;
+    --safe:#1c8257; --safe-soft:#dcefe5;
+    --c-sql:#008f86; --c-xss:#e8701a;
+    --font-body:"IBM Plex Sans KR",system-ui,-apple-system,"Malgun Gothic",sans-serif;
+    --font-mono:"IBM Plex Mono",ui-monospace,"SFMono-Regular",Menlo,monospace;
+  }
+  @media (prefers-color-scheme:dark){ :root:not([data-theme="light"]){
+    --bg:#0b1413; --grid:rgba(110,200,188,.05); --surface:#111c1b; --surface-2:#172220;
+    --ink:#e5efed; --muted:#8ba09c; --line:#233230;
+    --accent:#45d6c6; --accent-soft:#0f2e2b;
+    --danger:#ff7063; --danger-soft:#3a1c19;
+    --safe:#4fcb8c; --safe-soft:#123025;
+    --c-sql:#22a99e; --c-xss:#d1711f;
+    color-scheme:dark;
+  }}
+  :root[data-theme="dark"]{
+    --bg:#0b1413; --grid:rgba(110,200,188,.05); --surface:#111c1b; --surface-2:#172220;
+    --ink:#e5efed; --muted:#8ba09c; --line:#233230;
+    --accent:#45d6c6; --accent-soft:#0f2e2b;
+    --danger:#ff7063; --danger-soft:#3a1c19;
+    --safe:#4fcb8c; --safe-soft:#123025;
+    --c-sql:#22a99e; --c-xss:#d1711f;
+    color-scheme:dark;
+  }
+
+  *{box-sizing:border-box}
+  /* 모눈종이 실험 노트 바탕 */
+  body{background-color:var(--bg);color:var(--ink);font-family:var(--font-body);line-height:1.6;
+    background-image:linear-gradient(var(--grid) 1px,transparent 1px),
+                     linear-gradient(90deg,var(--grid) 1px,transparent 1px);
+    background-size:23px 23px;background-position:center top}
+  .wrap{max-width:720px;margin:0 auto;padding-inline:16px;padding-block:32px 48px}
+  code{font-family:var(--font-mono);font-size:.9em;background:var(--surface-2);
+    padding:1px 5px;border-radius:4px}
+
+  /* 소개 — 실험실 헤더 */
+  .lab-head{display:flex;gap:13px;align-items:center;margin-bottom:14px}
+  .lab-head .flask{flex:none;color:var(--accent)}
+  .eyebrow{font-size:12.5px;font-weight:600;color:var(--accent);margin:0 0 3px}
+  h1{font-size:clamp(25px,6vw,34px);font-weight:700;margin:0;line-height:1.15;text-wrap:balance}
+  .lede{font-size:16px;color:var(--muted);margin:0;max-width:60ch}
+  .lede b{color:var(--ink);font-weight:600}
+  .source{margin:12px 0 0;font-size:12px;color:var(--muted)}
+  .source b{color:var(--ink);font-weight:500}
+  .toggle-label{margin:24px 0 8px;font-size:13.5px;font-weight:600;color:var(--ink)}
+  /* 상단 사용법 안내 */
+  .guide{margin-top:20px;padding:16px;background:var(--surface);
+    border:1px solid var(--line);border-radius:12px}
+  .guide-title{font-size:13px;font-weight:600;color:var(--ink);margin:0 0 12px}
+  .guide-steps{display:flex;align-items:stretch;gap:8px}
+  .gstep{flex:1;min-width:0;display:flex;gap:8px;align-items:flex-start;
+    padding:10px 11px;background:var(--surface-2);border-radius:9px}
+  .gstep .gn{flex:none;font-family:var(--font-mono);font-weight:700;color:var(--accent);font-size:15px;line-height:1.2}
+  .gstep .gl{font-size:12px;line-height:1.35;color:var(--muted);min-width:0}
+  .gstep .gl b{display:block;color:var(--ink);font-weight:600;font-size:12.5px;margin-bottom:1px}
+  .garrow{align-self:center;color:var(--muted);font-size:14px;flex:none}
+  .guide-tip{margin:12px 0 0;font-size:12.5px;color:var(--muted)}
+  .guide-tip b{color:var(--ink)}
+  @media (max-width:460px){
+    .guide-steps{flex-direction:column}
+    .garrow{align-self:flex-start;margin-left:16px;transform:rotate(90deg)}
+  }
+  /* 결과 안 두 공격 비교 */
+  .cmp{display:flex;flex-direction:column;gap:6px;margin-bottom:8px}
+  .cmp-row{display:flex;justify-content:space-between;align-items:center;font-size:13.5px}
+  .cmp-row .cl{color:var(--ink);font-weight:600}
+  .cmp-row .cv{font-weight:700;font-variant-numeric:tabular-nums}
+  .cmp-row .cv.safe{color:var(--safe)}
+  .cmp-row .cv.danger{color:var(--danger)}
+  .cnote{margin:0;font-size:12.5px;color:var(--muted);line-height:1.55}
+  .cnote b{color:var(--ink)}
+
+  /* 공격 종류 토글 */
+  .attack-toggle{display:flex;gap:6px;background:var(--surface-2);border:1px solid var(--line);
+    border-radius:12px;padding:5px;margin-top:0}
+  .attack-toggle button{flex:1;padding:11px 8px;border:none;border-radius:8px;background:transparent;
+    color:var(--muted);font-family:var(--font-body);font-size:14px;font-weight:600;cursor:pointer;
+    transition:background .15s,color .15s}
+  .attack-toggle button.on{background:var(--accent);color:#fff}
+  .attack-toggle button:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+
+  .steps{display:flex;flex-direction:column;gap:18px;margin-top:18px}
+  .step{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:20px}
+  .step-head{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+  .num{flex:none;width:28px;height:28px;border-radius:7px;background:var(--accent-soft);
+    color:var(--accent);border:1px solid var(--accent);font-family:var(--font-mono);
+    font-size:13px;font-weight:700;display:grid;place-items:center}
+  .step-head h2{font-size:16px;font-weight:600;margin:0}
+  .hint{font-size:13px;color:var(--muted);margin:0 0 14px}
+  .hint b{color:var(--ink)}
+
+  /* 1단계 필터 */
+  .filters{display:flex;flex-direction:column;gap:8px}
+  .filter-opt{display:flex;gap:11px;align-items:flex-start;padding:12px 14px;
+    border:1px solid var(--line);border-radius:10px;cursor:pointer;background:var(--surface);
+    transition:border-color .15s,background .15s}
+  .filter-opt:hover{border-color:var(--accent)}
+  .filter-opt input{margin-top:3px;accent-color:var(--accent);flex:none}
+  .filter-opt.sel{border-color:var(--accent);background:var(--accent-soft)}
+  .filter-opt .fmid{flex:1;min-width:0}
+  .filter-opt .ft{display:block;font-weight:600;font-size:14px}
+  .filter-opt .fd{display:block;font-size:12.5px;color:var(--muted);margin-top:3px}
+  .filter-opt .lv{flex:none;align-self:center;font-family:var(--font-mono);font-size:11px;
+    font-weight:600;letter-spacing:.02em;padding:3px 9px;border-radius:999px;
+    background:var(--surface-2);color:var(--muted);border:1px solid var(--line)}
+
+  /* 2단계 예시 */
+  .examples{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px}
+  @media (max-width:460px){.examples{grid-template-columns:1fr}}
+  .ex-card{text-align:left;padding:11px 13px;border-radius:10px;border:1px solid var(--line);
+    background:var(--surface-2);color:var(--ink);cursor:pointer;min-width:0;
+    display:flex;flex-direction:column;gap:3px}
+  .ex-card:hover{border-color:var(--accent)}
+  .ex-card .el{font-size:13.5px;font-weight:600}
+  .ex-card .ec{font-family:var(--font-mono);font-size:11.5px;color:var(--muted);
+    min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  textarea{width:100%;min-height:64px;resize:vertical;padding:12px 14px;border-radius:10px;
+    border:1px solid var(--line);background:var(--surface-2);color:var(--ink);
+    font-family:var(--font-mono);font-size:14px;line-height:1.5}
+  textarea:focus-visible{outline:2px solid var(--accent);outline-offset:1px;border-color:transparent}
+  .btn-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+  .run{flex:1;min-width:150px;padding:13px;border:none;border-radius:10px;
+    background:var(--accent);color:#fff;font-family:var(--font-body);font-size:15px;
+    font-weight:600;cursor:pointer}
+  .run:hover{filter:brightness(1.07)}
+  .run:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+  .run.alt{background:var(--surface-2);color:var(--ink);border:1px solid var(--line)}
+  .run.alt:hover{border-color:var(--accent);filter:none}
+
+  /* 3단계 결과 */
+  #result[hidden]+.placeholder{display:block}
+  .placeholder{display:none;font-size:14px;color:var(--muted);padding:6px 0}
+  .verdict{display:flex;align-items:center;gap:10px;padding:14px 16px;border-radius:11px;
+    font-size:16px;font-weight:700;margin-bottom:14px}
+  .verdict.pass{background:var(--danger-soft);color:var(--danger)}
+  .verdict.block{background:var(--safe-soft);color:var(--safe)}
+  .verdict .ic{font-size:20px;line-height:1}
+  .rgrid{display:flex;flex-direction:column;gap:12px}
+  .rrow{display:grid;grid-template-columns:96px 1fr;gap:12px;align-items:start;font-size:13.5px}
+  .rrow .k{color:var(--muted);font-weight:500}
+  .rrow .v{min-width:0;word-break:break-word}
+  .rrow .v code{display:inline-block;max-width:100%;overflow-x:auto;white-space:pre}
+  .why{font-size:13.5px;line-height:1.65}
+  .why b{color:var(--ink)}
+  .paper-tag{display:inline-block;font-family:var(--font-mono);font-size:11px;
+    color:var(--accent);border:1px solid var(--accent);border-radius:5px;
+    padding:1px 6px;margin-top:4px}
+  /* C: 제대로 막으려면 박스 */
+  .fixbox{margin-top:14px;padding:13px 15px;border-radius:10px;border:1px dashed var(--safe);
+    background:var(--safe-soft)}
+  .fixbox .ft{font-weight:700;font-size:13.5px;color:var(--safe);margin-bottom:5px}
+  .fixbox .fb{font-size:13px;line-height:1.65}
+  .fixbox .fb b{color:var(--ink)}
+  /* 한꺼번에 비교 */
+  .alllist{display:flex;flex-direction:column;gap:8px}
+  .allrow{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;
+    border:1px solid var(--line);border-radius:9px;background:var(--surface-2)}
+  .allrow .ab{flex:none;font-size:12px;font-weight:700;padding:3px 8px;border-radius:6px;white-space:nowrap}
+  .allrow .ab.pass{background:var(--danger-soft);color:var(--danger)}
+  .allrow .ab.block{background:var(--safe-soft);color:var(--safe)}
+  .allrow .amid{min-width:0}
+  .allrow .al{font-size:13px;font-weight:600;display:block}
+  .allrow .ac{font-family:var(--font-mono);font-size:11.5px;color:var(--muted);
+    display:block;min-width:0;overflow-x:auto;white-space:pre;margin-top:2px}
+  .allrow .areason{display:block;font-size:12px;color:var(--muted);line-height:1.5;margin-top:5px}
+  .allrow .areason b{color:var(--ink)}
+  .contrast{margin-top:12px;padding:12px 14px;border-radius:10px;border:1px solid var(--accent);
+    background:var(--accent-soft);font-size:13px;line-height:1.6}
+  .contrast b{color:var(--ink)}
+
+  /* 논문 한눈에 보기 (막대그래프) */
+  .overview{margin-top:18px;background:var(--surface);border:1px solid var(--line);
+    border-radius:14px;padding:20px}
+  .overview h2{font-size:16px;font-weight:600;margin:0 0 5px}
+  .overview .osub{font-size:13px;color:var(--muted);margin:0 0 14px;line-height:1.55}
+  .overview .osub b{color:var(--ink)}
+  .clegend{display:flex;gap:16px;margin:0 0 8px;font-size:12.5px;color:var(--ink)}
+  .clegend span{display:inline-flex;align-items:center;gap:6px}
+  .clegend i{width:11px;height:11px;border-radius:3px;flex:none}
+  .clegend .i-sql{background:var(--c-sql)}
+  .clegend .i-xss{background:var(--c-xss)}
+  .chart{width:100%;height:auto;max-width:440px;display:block;margin:0 auto}
+  .chart .bar-sql{fill:var(--c-sql)}
+  .chart .bar-xss{fill:var(--c-xss)}
+  .chart .cgrid{stroke:var(--line);stroke-width:1}
+  .chart .clabel{fill:var(--muted);font-size:10px;font-family:var(--font-mono)}
+  .chart .cval{fill:var(--ink);font-size:10px;font-weight:700;font-family:var(--font-mono)}
+  .chart .cx{fill:var(--ink);font-size:11px;font-weight:600}
+  .ocap{margin:8px 0 0;font-size:11.5px;color:var(--muted);text-align:center}
+  .okey{margin:14px 0 0;padding:13px 15px;background:var(--accent-soft);border-radius:10px;
+    font-size:13px;line-height:1.65;color:var(--ink)}
+  .okey b{font-weight:700}
+
+  footer{margin-top:34px;padding-top:18px;border-top:1px solid var(--line);
+    font-size:12px;color:var(--muted);line-height:1.6}
+  footer b{color:var(--ink)}
+</style>
+
+<div class="wrap">
+  <div class="lab-head">
+    <svg class="flask" viewBox="0 0 24 24" width="34" height="34" fill="none"
+         stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M9 3h6"/>
+      <path d="M10 3v5.5L4.8 18.3A1.2 1.2 0 0 0 5.9 20h12.2a1.2 1.2 0 0 0 1.1-1.7L14 8.5V3"/>
+      <path d="M7.1 14h9.8"/>
+    </svg>
+    <div>
+      <p class="eyebrow">웹 보안 입문 실험실</p>
+      <h1>블랙리스트 필터 체험기</h1>
+    </div>
+  </div>
+  <p class="lede">
+    웹 보안을 <b>처음 배우는 사람</b>을 위한 실험 도구입니다. 공격 입력을 직접 넣어 보며,
+    블랙리스트 필터가 <b>어떤 공격을 막고 무엇을 놓치는지</b> 확인해 보세요.
+  </p>
+  <p class="source">바탕 논문: <b>「DVWA 보안 레벨에 따른 웹 공격 성공률 변화 분석」</b> (전지은, 2026)</p>
+  <div class="guide">
+    <p class="guide-title">처음이라면 이렇게 해보세요</p>
+    <div class="guide-steps">
+      <div class="gstep"><span class="gn">①</span><span class="gl"><b>필터 선택</b>medium 고르기</span></div>
+      <span class="garrow">→</span>
+      <div class="gstep"><span class="gn">②</span><span class="gl"><b>테스트 입력</b>①~⑤ 누르기</span></div>
+      <span class="garrow">→</span>
+      <div class="gstep"><span class="gn">③</span><span class="gl"><b>결과 확인</b>통과/차단 보기</span></div>
+    </div>
+    <p class="guide-tip">💡 처음이라면 <b>medium</b>을 고른 채 아래 예시 하나를 눌러 보세요.</p>
+  </div>
+
+  <p class="toggle-label">먼저 어떤 공격을 실험할지 고르세요</p>
+  <div class="attack-toggle" id="attackToggle" role="tablist" aria-label="공격 종류">
+    <button type="button" data-attack="xss" class="on" role="tab">XSS 공격</button>
+    <button type="button" data-attack="sqli" role="tab">SQL 인젝션</button>
+  </div>
+
+  <div class="steps">
+
+    <section class="step">
+      <div class="step-head"><span class="num">1</span><h2>필터를 고릅니다</h2></div>
+      <p class="hint">방어 방식을 고르세요.</p>
+      <div class="filters" id="filters"></div>
+    </section>
+
+    <section class="step">
+      <div class="step-head"><span class="num">2</span><h2>공격 코드를 넣습니다</h2></div>
+      <p class="hint">뭘 넣을지 몰라도 돼요. 예시를 누르면 바로 결과가 나옵니다. ①부터 눌러 보세요.</p>
+      <div class="examples" id="examples"></div>
+      <textarea id="payload" spellcheck="false"
+        placeholder="예시를 누르면 여기에 자동으로 들어가요. 직접 고쳐 넣어도 됩니다."></textarea>
+      <div class="btn-row">
+        <button class="run" id="run">다시 넣어 보기</button>
+        <button class="run alt" id="runAll">5개 한꺼번에 비교</button>
+      </div>
+    </section>
+
+    <section class="step">
+      <div class="step-head"><span class="num">3</span><h2>결과를 확인합니다</h2></div>
+      <div id="result" hidden></div>
+      <p class="placeholder">아직 결과가 없어요. 위에서 공격 코드를 넣고 눌러 보세요.</p>
+    </section>
+
+  </div>
+
+  <section class="overview">
+    <h2>논문 한눈에 보기</h2>
+    <p class="osub">「DVWA 보안 레벨에 따른 웹 공격 성공률 변화 분석」에서 측정한 실제 결과입니다.
+      보안 레벨을 올릴수록 공격 성공률은 줄지만, <b>medium</b>에서 두 공격의 운명이 갈립니다.</p>
+    <div class="clegend">
+      <span><i class="i-sql"></i>SQL 인젝션</span>
+      <span><i class="i-xss"></i>XSS</span>
+    </div>
+    <svg class="chart" viewBox="0 0 300 172" role="img"
+         aria-label="보안 레벨(low·medium·high)별 SQL 인젝션과 XSS의 공격 성공률 막대그래프">
+      <line class="cgrid" x1="32" y1="150" x2="294" y2="150"/>
+      <line class="cgrid" x1="32" y1="82"  x2="294" y2="82"/>
+      <line class="cgrid" x1="32" y1="14"  x2="294" y2="14"/>
+      <text class="clabel" x="26" y="153" text-anchor="end">0</text>
+      <text class="clabel" x="26" y="85"  text-anchor="end">50</text>
+      <text class="clabel" x="26" y="17"  text-anchor="end">100</text>
+      <!-- low -->
+      <rect class="bar-sql" x="48" y="14" width="26" height="136" rx="3"><title>low · SQL 인젝션 100%</title></rect>
+      <rect class="bar-xss" x="78" y="14" width="26" height="136" rx="3"><title>low · XSS 100%</title></rect>
+      <text class="cval" x="61" y="10" text-anchor="middle">100</text>
+      <text class="cval" x="91" y="10" text-anchor="middle">100</text>
+      <!-- medium -->
+      <rect class="bar-xss" x="165" y="68" width="26" height="82" rx="3"><title>medium · XSS 60%</title></rect>
+      <text class="cval" x="148" y="146" text-anchor="middle">0</text>
+      <text class="cval" x="178" y="64"  text-anchor="middle">60</text>
+      <!-- high -->
+      <text class="cval" x="235" y="146" text-anchor="middle">0</text>
+      <text class="cval" x="265" y="146" text-anchor="middle">0</text>
+      <!-- x labels -->
+      <text class="cx" x="76"  y="166" text-anchor="middle">low</text>
+      <text class="cx" x="163" y="166" text-anchor="middle">medium</text>
+      <text class="cx" x="250" y="166" text-anchor="middle">high</text>
+    </svg>
+    <p class="ocap">세로축: 공격 성공률(%) · 가로축: 보안 레벨</p>
+    <p class="okey"><b>medium</b>에서 SQL 인젝션은 <b>0%</b>로 완전히 막혔지만, XSS는 <b>60%</b>가 뚫렸습니다.
+      방어가 공격의 <b>핵심</b>(따옴표)을 막았는지, <b>겉모양</b>(특정 글자)만 막았는지의 차이입니다.</p>
+  </section>
+
+  <footer>
+    이 체험기는 공격 코드를 <b>실제로 실행하지 않습니다.</b> 논문과 똑같은 규칙으로 통과 여부만 판정해 안전하게 보여 줍니다.<br>
+    출처: 전지은, 「DVWA 보안 레벨에 따른 웹 공격 성공률 변화 분석」 (SKT ALEPH 과제 10, 2026).
+  </footer>
+</div>
+
+<script>
+  // ===== 공격별 데이터 =====
+  const DATA = {
+    xss: {
+      filters: [
+        {id:"none",   lv:"low",    ft:"필터 없음",   fd:"입력을 그대로 통과"},
+        {id:"medium", lv:"medium", ft:"일부만 막기", fd:"‘<code>&lt;script&gt;</code>’ 글자만 지움"},
+        {id:"proper", lv:"high",   ft:"전부 막기",   fd:"특수문자를 모두 안전한 글자로 바꿈"},
+      ],
+      examples: [
+        {id:"X1", label:"① 교과서에 나오는 기본 공격", p:"<script>alert(1)<\/script>"},
+        {id:"X2", label:"② 이미지 태그에 숨기기",      p:"<img src=x onerror=alert(1)>"},
+        {id:"X3", label:"③ 대소문자 섞어 쓰기",        p:"<ScRiPt>alert(1)<\/ScRiPt>"},
+        {id:"X4", label:"④ svg 태그로 숨기기",         p:"<svg onload=alert(1)>"},
+        {id:"X5", label:"⑤ 따옴표로 앞 태그 닫기",     p:'"><script>alert(1)<\/script>'},
+      ],
+    },
+    sqli: {
+      filters: [
+        {id:"none",   lv:"low",    ft:"필터 없음",   fd:"입력을 그대로 통과"},
+        {id:"medium", lv:"medium", ft:"일부만 막기", fd:"작은따옴표(')만 무력화"},
+        {id:"proper", lv:"high",   ft:"전부 막기",   fd:"입력을 명령이 아닌 ‘값’으로만 취급"},
+      ],
+      examples: [
+        {id:"S1", label:"① 항상 참으로 만들기",        p:"1' OR '1'='1"},
+        {id:"S2", label:"② 뒷부분 주석 처리",          p:"1' OR '1'='1' -- "},
+        {id:"S3", label:"③ 대소문자 섞어 쓰기",        p:"1' oR '1'='1"},
+        {id:"S4", label:"④ 공백 대신 주석 끼우기",     p:"1'/**/OR/**/'1'='1"},
+        {id:"S5", label:"⑤ 계정·비밀번호 빼내기",      p:"1' UNION SELECT user,password FROM users -- "},
+      ],
+    },
+  };
+
+  let attack = "xss";   // 현재 공격 종류
+
+  // ===== 핵심 로직: 논문의 medium 필터를 그대로 재현 =====
+  function htmlEncode(s){
+    return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  }
+  function applyFilter(input, atk, mode){
+    if(mode === "none") return input;
+    if(atk === "xss"){
+      if(mode === "proper") return htmlEncode(input);
+      // medium = 소문자 script 태그만 제거 (대소문자 구분)
+      return input.replace(/<script>/g,"").replace(/<\/script>/g,"");
+    } else {
+      if(mode === "proper") return input;          // 값으로만 취급 (analyze에서 차단 처리)
+      return input.replace(/'/g,"\\'");            // medium = 작은따옴표 무력화
+    }
+  }
+  function analyze(filtered, atk, mode){
+    if(atk === "xss"){
+      if(/<script[\s>]/i.test(filtered)) return {exec:true, kind:"script"};
+      const m = filtered.match(/\son([a-z]+)\s*=/i);
+      if(m && /<[a-z]/i.test(filtered)) return {exec:true, kind:"event", handler:m[1].toLowerCase()};
+      return {exec:false, kind:"none"};
+    } else {
+      if(mode === "proper") return {exec:false, kind:"param"};
+      const active = /(^|[^\\])'/.test(filtered);  // 무력화되지 않은 작은따옴표가 남았나
+      return {exec:active, kind: active ? "quote" : "noquote"};
+    }
+  }
+  function esc(s){ return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+  function rate(atk, mode){
+    let p = 0;
+    DATA[atk].examples.forEach(function(e){ if(analyze(applyFilter(e.p,atk,mode),atk,mode).exec) p++; });
+    return Math.round(p / DATA[atk].examples.length * 100);
+  }
+
+  // ===== 판정 이유 + 올바른 방어법(C) =====
+  function buildWhy(raw, filtered, atk, mode, a){
+    let why = "", tag = "", fix = "";
+    if(atk === "xss"){
+      if(mode === "none"){
+        why = a.exec ? "필터가 없어서 공격이 그대로 실행돼요." : "실행되는 코드가 아니라 일반 글자예요.";
+        if(a.exec) tag = "논문 low · 100%";
+      } else if(mode === "proper"){
+        why = "특수문자가 전부 일반 글자로 바뀌어, 코드가 아니라 글자로 표시돼요.";
+        tag = "논문 high · 0%";
+      } else { // medium
+        if(!a.exec){
+          if(filtered !== raw){ why = "필터가 <code>&lt;script&gt;</code>를 지워서 막혔어요."; tag = "논문 medium · 차단"; }
+          else { why = "실행되는 코드가 아니라 일반 글자예요."; }
+        } else if(a.kind === "script"){
+          why = "필터는 <b>소문자</b> <code>&lt;script&gt;</code>만 지워요. 대소문자를 섞으면 그냥 통과돼요.";
+          tag = "논문 medium · X3 우회";
+        } else {
+          why = "이 공격엔 <code>&lt;script&gt;</code>가 없어요. 대신 <b>" + esc(a.handler) + "</b> 이벤트로 실행되는데, 필터는 <code>&lt;script&gt;</code>만 찾으니 놓쳐요.";
+          tag = "논문 medium · X2·X4 우회";
+        }
+      }
+      if(a.exec) fix = "특정 글자만 지우지 말고, 출력할 때 <b>특수문자를 모두 안전한 글자로 바꾸면</b> 막혀요(이걸 ‘출력 인코딩’이라고 해요). 위에서 <b>‘전부 막기’</b>를 골라 보세요.";
+    } else { // sqli
+      if(mode === "none"){
+        why = a.exec ? "작은따옴표로 원래 쿼리를 벗어났어요." : "작은따옴표가 없어 공격이 되지 않아요.";
+        if(a.exec) tag = "논문 low · 100%";
+      } else if(mode === "proper"){
+        why = "입력을 <b>‘값’으로만</b> 취급해서 쿼리 구조를 바꿀 수 없어요.";
+        tag = "권고 방어";
+      } else { // medium
+        if(a.exec){
+          why = "작은따옴표가 남아 쿼리를 벗어났어요.";
+        } else {
+          why = "작은따옴표가 무력화돼서, <b>변형(대소문자·주석)도 소용없어요.</b> SQLi는 medium에서 전부 막혀요.";
+          tag = "논문 medium · 0%";
+        }
+      }
+      if(a.exec) fix = "입력을 명령에 직접 붙이지 말고, <b>‘값’으로만 따로 넘기면</b> 막혀요(이걸 ‘파라미터라이즈드 쿼리’라고 해요). 위에서 <b>‘전부 막기’</b>를 골라 보세요.";
+    }
+    return {why, tag, fix};
+  }
+
+  // ===== 화면 그리기 =====
+  const filtersBox = document.getElementById("filters");
+  const exWrap = document.getElementById("examples");
+  const ta = document.getElementById("payload");
+  const resultEl = document.getElementById("result");
+
+  function renderFilters(){
+    const fs = DATA[attack].filters;
+    filtersBox.innerHTML = "";
+    fs.forEach(function(f, i){
+      const lab = document.createElement("label");
+      lab.className = "filter-opt" + (f.id === "medium" ? " sel" : "");
+      lab.innerHTML =
+        '<input type="radio" name="filter" value="'+f.id+'"'+(f.id==="medium"?" checked":"")+'>'+
+        '<span class="fmid"><span class="ft">'+f.ft+'</span>'+
+        '<span class="fd">'+f.fd+'</span></span>'+
+        '<span class="lv">'+f.lv+'</span>';
+      filtersBox.appendChild(lab);
+    });
+  }
+  function renderExamples(){
+    exWrap.innerHTML = "";
+    DATA[attack].examples.forEach(function(e){
+      const b = document.createElement("button");
+      b.className = "ex-card"; b.type = "button";
+      const l = document.createElement("span"); l.className="el"; l.textContent = e.label;
+      const c = document.createElement("span"); c.className="ec"; c.textContent = e.p;
+      b.appendChild(l); b.appendChild(c);
+      b.addEventListener("click", function(){ ta.value = e.p; run(); });
+      exWrap.appendChild(b);
+    });
+  }
+  function currentMode(){
+    const r = filtersBox.querySelector("input:checked");
+    return r ? r.value : "medium";
+  }
+  function syncSel(){
+    filtersBox.querySelectorAll(".filter-opt").forEach(function(l){
+      l.classList.toggle("sel", l.querySelector("input").checked);
+    });
+  }
+
+  function run(){
+    const raw = ta.value;
+    const mode = currentMode();
+    if(raw.trim() === ""){
+      resultEl.hidden = false;
+      resultEl.innerHTML =
+        '<div class="verdict block"><span class="ic">✎</span>공격 코드를 먼저 넣어 주세요</div>'+
+        '<p class="why">위 2단계에서 예시를 누르거나 직접 입력한 뒤 다시 눌러 보세요.</p>';
+      return;
+    }
+    const filtered = applyFilter(raw, attack, mode);
+    const a = analyze(filtered, attack, mode);
+    const r = buildWhy(raw, filtered, attack, mode, a);
+    const passed = a.exec;
+    const shownFiltered = (attack==="sqli" && mode==="proper") ? "(입력을 ‘값’으로만 취급)" : (esc(filtered) || "(빈 값)");
+
+    resultEl.hidden = false;
+    resultEl.innerHTML =
+      '<div class="verdict '+(passed?"pass":"block")+'">'+
+        '<span class="ic">'+(passed?"⚠":"✓")+'</span>'+
+        (passed?"공격 통과 — 방어가 뚫렸습니다":"공격 차단 — 방어가 막았습니다")+
+      '</div>'+
+      '<div class="rgrid">'+
+        '<div class="rrow"><span class="k">넣은 코드</span><span class="v"><code>'+esc(raw)+'</code></span></div>'+
+        '<div class="rrow"><span class="k">필터 통과 후</span><span class="v"><code>'+shownFiltered+'</code></span></div>'+
+        '<div class="rrow"><span class="k">판정 이유</span><span class="v why">'+r.why+(r.tag?'<br><span class="paper-tag">'+r.tag+'</span>':'')+'</span></div>'+
+      '</div>'+
+      (r.fix ? '<div class="fixbox"><div class="ft">✅ 제대로 막으려면</div><div class="fb">'+r.fix+'</div></div>' : '');
+  }
+
+  function runAll(){
+    const mode = currentMode();
+    let pass = 0, rows = "";
+    DATA[attack].examples.forEach(function(e){
+      const filtered = applyFilter(e.p, attack, mode);
+      const a = analyze(filtered, attack, mode);
+      const r = buildWhy(e.p, filtered, attack, mode, a);
+      if(a.exec) pass++;
+      rows +=
+        '<div class="allrow">'+
+          '<span class="ab '+(a.exec?"pass":"block")+'">'+(a.exec?"통과 ⚠":"차단 ✓")+'</span>'+
+          '<span class="amid"><span class="al">'+esc(e.label)+'</span>'+
+            '<span class="ac">'+esc(e.p)+'</span>'+
+            '<span class="areason">'+r.why+'</span></span>'+
+        '</div>';
+    });
+    const pct = Math.round(pass / 5 * 100);
+    const atkName = attack==="xss" ? "XSS" : "SQL 인젝션";
+    const modeName = mode==="none" ? "필터 없음" : mode==="proper" ? "전부 막기" : "일부만 막기";
+    resultEl.hidden = false;
+    resultEl.innerHTML =
+      '<div class="verdict '+(pass>0?"pass":"block")+'">'+
+        '<span class="ic">'+(pass>0?"⚠":"✓")+'</span>'+atkName+' — 5개 중 '+pass+'개 통과 ('+pct+'%)'+
+      '</div>'+
+      '<p class="why" style="margin-bottom:12px">필터: <b>'+esc(modeName)+'</b></p>'+
+      '<div class="alllist">'+rows+'</div>';
+  }
+
+  // ===== 이벤트 =====
+  document.getElementById("attackToggle").addEventListener("click", function(ev){
+    const btn = ev.target.closest("button[data-attack]");
+    if(!btn) return;
+    attack = btn.dataset.attack;
+    this.querySelectorAll("button").forEach(function(b){ b.classList.toggle("on", b===btn); });
+    renderFilters(); renderExamples(); syncSel();
+    ta.value = "";
+    resultEl.hidden = true;
+  });
+  filtersBox.addEventListener("change", syncSel);
+  document.getElementById("run").addEventListener("click", run);
+  document.getElementById("runAll").addEventListener("click", runAll);
+  ta.addEventListener("keydown", function(ev){ if((ev.ctrlKey||ev.metaKey)&&ev.key==="Enter") run(); });
+
+  renderFilters(); renderExamples(); syncSel();
+</script>
